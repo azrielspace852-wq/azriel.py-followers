@@ -1,7 +1,7 @@
 name: Combine Markdown from ZIPs
 
 on:
-  workflow_dispatch:          # jalankan manual
+  workflow_dispatch:
   push:
     paths:
       - '**/*.zip'            # otomatis jika ada zip baru/diubah
