@@ -138,7 +138,7 @@ class TextDataset(Dataset):
 # --------------------------------------------------------------------------
 
 class MiniGPT(nn.Module):
-    def __init__(self, vocab_size, d_model=256, n_head=4, n_layers=4, max_len=256, dropout=0.1):
+    def __init__(self, vocab_size, d_model=256, n_head=4, n_layers=4, max_len=4024, dropout=0.1):
         super().__init__()
         self.max_len = max_len
         self.token_emb = nn.Embedding(vocab_size, d_model, padding_idx=0)
