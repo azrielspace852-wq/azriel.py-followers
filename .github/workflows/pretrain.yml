@@ -19,7 +19,7 @@ on:
 jobs:
   train:
     runs-on: ubuntu-latest
-    timeout-minutes: 340   # Batas maksimum job publik GitHub Actions ~360 menit (6 jam)
+    timeout-minutes: 340      # Batas maksimum job publik GitHub Actions ~360 menit (6 jam)
 
     steps:
       - name: Checkout repo
