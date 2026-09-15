@@ -1,0 +1,103 @@
+name: Combine Markdown from ZIPs
+
+on:
+  workflow_dispatch:          # jalankan manual
+  push:
+    paths:
+      - '**/*.zip'            # otomatis jika ada zip baru/diubah
+
+jobs:
+  extract-and-combine:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup
+        run: |
+          mkdir -p extracted combined
+          # Install tools jika diperlukan (unzip biasanya sudah ada)
+
+      - name: Find and extract all ZIP files
+        run: |
+          echo "=== Mencari semua file .zip ==="
+          find . -type f -name "*.zip" -print0 | while IFS= read -r -d '' zipfile; do
+            echo "Mengekstrak: $zipfile"
+            # Buat folder unik berdasarkan nama zip (tanpa ekstensi)
+            dirname=$(basename "$zipfile" .zip)
+            mkdir -p "extracted/$dirname"
+            unzip -o -q "$zipfile" -d "extracted/$dirname" || {
+              echo "Gagal mengekstrak $zipfile, dilewati"
+              continue
+            }
+          done
+          echo "=== Selesai mengekstrak ==="
+
+      - name: Collect and sort all Markdown files
+        run: |
+          echo "=== Mengumpulkan file Markdown ==="
+          # Cari semua .md, sort secara alfabetis (path lengkap) agar urutan rapi & sequential
+          find extracted -type f \( -name "*.md" -o -name "*.markdown" \) | sort > md_list.txt
+          
+          total=$(wc -l < md_list.txt)
+          echo "Ditemukan $total file Markdown"
+
+          if [ "$total" -eq 0 ]; then
+            echo "Tidak ada file Markdown ditemukan!"
+            exit 1
+          fi
+
+      - name: Combine into single Markdown document
+        run: |
+          OUTPUT="combined/combined-markdown.md"
+          
+          # Header dokumen
+          cat > "$OUTPUT" << 'EOF'
+          # Dokumen Markdown Gabungan
+          
+          > File ini dihasilkan otomatis dari semua file Markdown di dalam ZIP.
+          > Urutan disusun secara alfabetis berdasarkan path file.
+          
+          ---
+          
+          EOF
+
+          # Gabungkan satu per satu dengan separator rapi
+          while IFS= read -r mdfile; do
+            relative_path="${mdfile#extracted/}"
+            
+            echo "" >> "$OUTPUT"
+            echo "<!-- ============================================================ -->" >> "$OUTPUT"
+            echo "## Sumber: \`$relative_path\`" >> "$OUTPUT"
+            echo "" >> "$OUTPUT"
+            echo "<!-- File: $relative_path -->" >> "$OUTPUT"
+            echo "" >> "$OUTPUT"
+            
+            # Tambahkan isi file (jaga agar encoding aman)
+            cat "$mdfile" >> "$OUTPUT"
+            
+            echo "" >> "$OUTPUT"
+            echo "" >> "$OUTPUT"
+            echo "---" >> "$OUTPUT"
+            
+          done < md_list.txt
+
+          echo "=== Selesai menggabungkan ==="
+          echo "Hasil: $OUTPUT"
+          ls -lh "$OUTPUT"
+
+      - name: Upload combined Markdown as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: combined-markdown
+          path: combined/combined-markdown.md
+          retention-days: 30
+
+      # Opsional: Commit hasil ke repository (uncomment jika ingin)
+      # - name: Commit combined file
+      #   run: |
+      #     git config user.name "github-actions[bot]"
+      #     git config user.email "github-actions[bot]@users.noreply.github.com"
+      #     git add combined/combined-markdown.md
+      #     git commit -m "docs: update combined markdown from ZIPs" || echo "Tidak ada perubahan"
+      #     git push
