@@ -1,7 +1,7 @@
 {
   "architectures": ["GPT2LMHeadModel"],
   "model_type": "gpt2",
-  "vocab_size": 8000,
+  "vocab_size": 1457,
   "n_positions": 256,
   "n_ctx": 256,
   "n_embd": 256,
