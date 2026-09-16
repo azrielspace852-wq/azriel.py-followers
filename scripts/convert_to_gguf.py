@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MiniGPT (custom) -> GGUF via GPT-2 wrapper."""
+"""MiniGPT (custom) -> GGUF via GPT-2 wrapper. v3 (transpose fix + vocab auto)."""
 import json
 import os
 import subprocess
@@ -20,7 +20,12 @@ OUTTYPE = os.environ.get("OUTTYPE", "f16")
 
 
 def remap_keys(sd):
-    """MiniGPT state_dict -> HF GPT-2 state_dict."""
+    """MiniGPT state_dict -> HF GPT-2 state_dict.
+
+    PyTorch Linear: weight shape (out, in). Komputasi: y = x W^T + b
+    HF Conv1D     : weight shape (in, out). Komputasi: y = x W + b
+    => W_hf = W_pt^T
+    """
     new = {}
     for k, v in sd.items():
         k = k.replace("module.", "").replace("_orig_mod.", "")
@@ -40,22 +45,24 @@ def remap_keys(sd):
             rest = ".".join(parts[3:])
             base = f"transformer.h.{i}."
             if rest == "self_attn.in_proj_weight":
-                # PyTorch (3d, d) -> GPT2 c_attn (d, 3d)
+                # (3d, d) -> chunk -> 3x(d,d) -> transpose -> cat dim=1 -> (d, 3d)
                 q, kk, vv = v.chunk(3, dim=0)
-                new[base + "attn.c_attn.weight"] = torch.cat([q, kk, vv], dim=1).contiguous()
+                new[base + "attn.c_attn.weight"] = torch.cat(
+                    [q.t(), kk.t(), vv.t()], dim=1
+                ).contiguous()
             elif rest == "self_attn.in_proj_bias":
                 q, kk, vv = v.chunk(3, dim=0)
                 new[base + "attn.c_attn.bias"] = torch.cat([q, kk, vv]).contiguous()
             elif rest == "self_attn.out_proj.weight":
-                new[base + "attn.c_proj.weight"] = v
+                new[base + "attn.c_proj.weight"] = v.t().contiguous()
             elif rest == "self_attn.out_proj.bias":
                 new[base + "attn.c_proj.bias"] = v
             elif rest == "linear1.weight":
-                new[base + "mlp.c_fc.weight"] = v
+                new[base + "mlp.c_fc.weight"] = v.t().contiguous()
             elif rest == "linear1.bias":
                 new[base + "mlp.c_fc.bias"] = v
             elif rest == "linear2.weight":
-                new[base + "mlp.c_proj.weight"] = v
+                new[base + "mlp.c_proj.weight"] = v.t().contiguous()
             elif rest == "linear2.bias":
                 new[base + "mlp.c_proj.bias"] = v
             elif rest == "norm1.weight":
@@ -74,14 +81,12 @@ def remap_keys(sd):
 
 
 def build_hf_tokenizer_files(hf_dir: Path, tok_json_path: Path):
-    """Custom tokenizer.json ({"stoi": {...}}) -> vocab.json + merges.txt (GPT-2 format)."""
     data = json.load(open(tok_json_path, encoding="utf-8"))
     stoi = data["stoi"]
 
     with open(hf_dir / "vocab.json", "w", encoding="utf-8") as f:
         json.dump({tok: int(i) for tok, i in stoi.items()}, f, ensure_ascii=False)
 
-    # Word-level, tanpa BPE merges. Tetap butuh file ini supaya converter GPT-2 jalan.
     with open(hf_dir / "merges.txt", "w", encoding="utf-8") as f:
         f.write("#version: 0.2\n")
 
@@ -119,6 +124,21 @@ def main():
     sd = remap_keys(obj)
 
     cfg = GPT2Config.from_json_file(str(CONFIG))
+
+    # === AUTO-FIX vocab_size dari tokenizer.json ===
+    tok_data = json.load(open(TOK_JSON, encoding="utf-8"))
+    real_vocab = int(tok_data["vocab_size"])
+    if cfg.vocab_size != real_vocab:
+        print(f"[!] Override vocab_size: {cfg.vocab_size} -> {real_vocab}")
+        cfg.vocab_size = real_vocab
+
+    # Auto-fix n_positions dari pos_emb
+    real_pos = sd["transformer.wpe.weight"].shape[0]
+    if cfg.n_positions != real_pos:
+        print(f"[!] Override n_positions: {cfg.n_positions} -> {real_pos}")
+        cfg.n_positions = real_pos
+        cfg.n_ctx = real_pos
+
     model = GPT2LMHeadModel(cfg)
     missing, unexpected = model.load_state_dict(sd, strict=False)
     print(f"[+] missing={len(missing)} unexpected={len(unexpected)}")
